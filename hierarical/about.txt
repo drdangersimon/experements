@@ -1,0 +1,1 @@
+Testing that my staking works using hierarichal baysian methods

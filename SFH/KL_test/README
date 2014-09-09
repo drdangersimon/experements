@@ -1,0 +1,6 @@
+I want to figure out which wavelengths are used to recover different paramters using the kullback–leibler divergence.
+
+I will fit a full spectrum and compare the postieror revoerd of each marganalized parameter to a uniform distribution.
+Wavelengths that give the biggest change will be used to determine which areas matter.
+
+I can check this by comparing it to a Leverage score of the SSP libraies for age and metalicity.

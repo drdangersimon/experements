@@ -1,0 +1,16 @@
+Testing for pool MCMC. Sometimes likelihood calculation takes too long to run sequentually. But I have the power of manny processors, but I want only 1 chain to run. How do I speed this up?
+
+Pool MCMC, has 1 chain, with a head worker and sub-workers who calculate the likelihood.
+
+sub-workers psuedo code:
+1. get current state of main chain
+2. calculate likelihood
+3. return to main chain
+4. check if to quit
+5. if not, go to 1
+
+Main worker code:
+1. normal mcmcm
+2. instead of calculating likelihood, look in pool, choose randomly weighting with time in pool
+3. update stats and sent to sub-workers
+4. goto 1 if exit critera not met.
