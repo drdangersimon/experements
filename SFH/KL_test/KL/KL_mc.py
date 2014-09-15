@@ -60,8 +60,6 @@ def run_fit(posterior, pool, temp_save_path='unfinnish.pik'):
 
     return sampler
 
-def make_cdf(chain):
-    '''Returns cdf of chain'''
 
 def get_marg_info(sampler):
     '''makes chains into marginalize postierior and does KL and kuiper test against uniform'''
@@ -78,6 +76,8 @@ def get_marg_info(sampler):
     #return sfh_post, age_post, met_post, sfh_div, age_div, met_div
     return out_post[0], out_post[1], out_post[2], out_div[0], out_div[1], out_div[1]
 
+
+
 def run_KL_MC(db_path, bins, min_wave=3500, max_wave=8000):
     '''Runs bins amount of wavelength runs. and returns KL-divergence and
     Kuiper stats from each wavelength region removed
@@ -87,6 +87,10 @@ def run_KL_MC(db_path, bins, min_wave=3500, max_wave=8000):
     size = comm.size
     if rank == 0:
         param, spec, wave = get_data(db_path)
+        # get min and max wavelength
+        index = np.where(np.logical_and(wave >= min_wave, wave <= max_wave))[0]
+        wave = wave[index]
+        spec = spec[:,index]
         if isinstance(bins, str) or bins > len(wave):
             bins = wave + 0
 
@@ -101,58 +105,75 @@ def run_KL_MC(db_path, bins, min_wave=3500, max_wave=8000):
 
         else:
             # get data to fit
-            rand_in = spec[params[:,1]>9].shape[0]
+            rand_in = spec[param[:,1]>9].shape[0]
             spec_index = np.random.randint(rand_in)
-            data_param = params[params[:,1]>9][spec_index]
-            data = np.vstack((wave, spec[params[:,1]>9][spec_index,:])).T
+            data_param = param[param[:,1]>9][spec_index]
+            data = np.vstack((wave, spec[param[:,1]>9][spec_index,:])).T
             cur_wave = -1
             results = {}
     else:
         data = None
         cur_wave = None
+        bins = None
     # send data and initalize pools
     pool = emcee_lik.MPIPool_stay_alive(loadbalance=True)
     data = comm.bcast(data, 0)
+    wave = data[:, 0]
     cur_wave = comm.bcast(cur_wave, 0)
-    diff_wave = np.diff(bins)
+    bins = comm.bcast(bins, 0)
     # start fitting
     # no chainge
-    if cur_wave > 0:
+    if cur_wave < 0:
         posterior = emcee_lik.LRG_emcee({-1:data}, db_path, have_dust=False,
                                         have_losvd=False)
+        posterior.init()
         if not pool.is_master():
             pool.wait(posterior)
-        sampler = run_fit(posterior, pool)
-        results[-1] = get_marg_info(sampler)
+        else:
+            pool.close()
+            sampler = run_fit(posterior, pool)
+            results[-1] = get_marg_info(sampler)
+            
         cur_wave += 1
     # change
-    for cur_wave in range(cur_wave, len(bins)):
+    for cur_wave in range(cur_wave, len(bins)-1):
         # store current work
-        pik.dump((bins, data, data_param, cur_wave, results), open('temp.pik', 'w'), 2)
+        if pool.is_master():
+            pik.dump((bins, data, data_param, cur_wave, results), open('temp.pik', 'w'), 2)
         # remove wavelength
-        index = np.where(np.logical_and(bins[cur_wave] < wave,
-                                        bins[cur_wave] + diff_wave[cur_wave] <= wave))[0]
+        index = np.where(np.logical_and(bins[cur_wave] <= wave,
+                                        bins[cur_wave+1] >= wave))[0]
+        
         fit_data = data[index]
-        posterior = emcee_lik.LRG_emcee({bin[cur_wave]:fit_data}, db_path, have_dust=False,
+        if pool.is_master() and len(fit_data) == 0:
+            print 'telling to close'
+            pool.close()
+            continue
+        print fit_data, cur_wave, rank
+        posterior = emcee_lik.LRG_emcee({bins[cur_wave]:fit_data}, db_path, have_dust=False,
                                         have_losvd=False)
+        posterior.init()
         # workers
         if not pool.is_master():
             pool.wait(posterior)
+            print 'here'
             continue
         # make samplers and run
         sampler = run_fit(posterior, pool)
+        pool.close()
         # get margionalized posteriors and kuiper,KL divergence for each
-        results[bin[cur_wave]] = get_marg_info(sampler)
+        results[bins[cur_wave]] = get_marg_info(sampler)
 
     # return
     if pool.is_master():
         os.remove('temp.pik')
         return bins, data, data_param, cur_wave, results
     else:
+        print 'worker is done'
         sys.exit(0)
 
 
 if __name__ == '__main__':
     db_path = '/home/thuso/Phd/experements/hierarical/LRG_Stack/burst_dtau_10.db'
     a = run_KL_MC(db_path, 50)
-    pik.dump(a, open('test1.pik'),2)
+    pik.dump(a, open('test1.pik','w'),2)
