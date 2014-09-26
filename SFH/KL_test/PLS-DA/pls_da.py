@@ -58,16 +58,16 @@ def run_fit(posterior, pool, temp_save_path='unfinnish.pik'):
     # get ready for real run
     sampler.reset()
     ess = 0.
-    while True
+    while True:
         for pos, prob, rstate in sampler.sample(pos, iterations=100, rstate0=rstate):
-        show = 'Real run: Postieror=%e acceptance=%2.1f ESS=%2.1f'%(np.mean(prob), 100*accept, ess)
-        print show
+            show = 'Real run: Postieror=%e acceptance=%2.1f ESS=%2.1f'%(np.mean(prob), 100*accept, ess)
+            print show
         
         pik.dump((posterior.data, sampler),
             open(temp_save_path, 'w'), 2)
         # calcuate effective sample size. quit if ess>=1000
         ess = (sampler.flatchain.shape[0]/
-               np.nanmin(hange_sampler.get_autocorr_time()))
+               np.nanmin(sampler.get_autocorr_time()))
         if ess >= 1000:
             break
         
@@ -103,10 +103,11 @@ def fit_age(db_path, param, min_wave=3500, max_wave=10000):
             raise ValueError('param must me age, metals or sfh.')
         info_wave = np.argsort(spec_info[:,param]**2/
                                 np.sum(spec_info[:,param]**2))[-100:]
-        # choose random spectra
-        spec_index = np.random.randint(spec.shape[0])
-        data_param = params[spec_index]
-        data = np.vstack((wave, spec[spec_index,:])).T
+        # choose random spectra > 1gry
+        rand_in = spec[params[:,1]>9].shape[0]
+        spec_index = np.random.randint(rand_in)
+        data_param = params[params[:,1]>9][spec_index]
+        data = np.vstack((wave, spec[params[:,1]>9][spec_index,:])).T
     else:
         data = None
     # get data from root
