@@ -78,7 +78,7 @@ def get_marg_info(sampler):
 
 
 
-def run_vanilla_MC(db_path, min_wave=3500, max_wave=8000):
+def run_vanilla_MC(db_path, save_path, min_wave=3500, max_wave=8000):
     '''Fits only ssps. and returns KL-divergence and
     Kuiper stats from each wavelength region removed
     if bins is str will assume to make bins same number as range'''
@@ -91,23 +91,32 @@ def run_vanilla_MC(db_path, min_wave=3500, max_wave=8000):
         index = np.where(np.logical_and(wave >= min_wave, wave <= max_wave))[0]
         wave = wave[index]
         spec = spec[:,index]
-       # check if recovery file is around
         # get data to fit
         index = np.logical_and(param[:,1]>=9, param[:,0] == 0)
         spec = spec[index]
         spec_shape = spec.shape[0]
         data_param = param[index]
-        results = {}
+        # check if recovery file is around
+        if os.path.exists(save_path):
+            results = pik.load(open(save_path))
+        else:
+            results = {}
+            for index in range(20):#spec_shape):
+                results[index] = []
     else:
         data = None
         wave = None
         spec_shape = None
-    
+        results = None
+        
     # send data and initalize pools
     pool = emcee_lik.MPIPool_stay_alive(loadbalance=True)
-    wave, spec_shape = comm.bcast((wave, spec_shape))
+    wave, spec_shape, results = comm.bcast((wave, spec_shape, results))
     # start fitting
-    for spec_index in xrange(spec_shape):
+    for spec_index in results:
+        spec_index = comm.bcast(spec_index)
+        if len(results[spec_index]) > 0:
+            continue
         if rank == 0:
             data = np.vstack((wave, spec[spec_index,:])).T
         data = comm.bcast(data)
@@ -123,7 +132,7 @@ def run_vanilla_MC(db_path, min_wave=3500, max_wave=8000):
         pool.close()
         # get margionalized posteriors and kuiper,KL divergence for each
         results[spec_index] = [sampler, data, data_param[spec_index]]
-
+        pik.dump(results, open(save_path, 'w'), 2)
     # return
     if pool.is_master():
         return results
@@ -160,6 +169,12 @@ def plot_div(path):
     return bins, sfh, age, metal
     
 if __name__ == '__main__':
+    # check if save name
+    if len(sys.argv) <= 1:
+        save_name = 'results%i.pik'%np.random.randint(100)
+    else:
+        save_name = sys.argv[1]
     db_path = '/home/thuso/Phd/experements/hierarical/LRG_Stack/burst_dtau_10.db'
-    results = run_vanilla_MC(db_path)
-    pik.dump(a, open('test1.pik','w'),2)
+    results = run_vanilla_MC(db_path, save_name)
+    print 'here'
+    pik.dump(results, open(save_name,'w'),2)
