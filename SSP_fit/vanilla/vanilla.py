@@ -101,8 +101,9 @@ def run_vanilla_MC(db_path, save_path, min_wave=3500, max_wave=8000):
             results = pik.load(open(save_path))
         else:
             results = {}
-            for index in range(20):#spec_shape):
+            for index in range(spec_shape):
                 results[index] = []
+            pik.dump(results, open(save_path, 'w'), 2)
     else:
         data = None
         wave = None
