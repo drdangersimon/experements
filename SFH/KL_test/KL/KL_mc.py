@@ -172,7 +172,34 @@ def run_KL_MC(db_path, bins, min_wave=3500, max_wave=8000):
         print 'worker is done'
         sys.exit(0)
 
-
+def plot_div(path):
+    '''Plots KL-divergence vs wavelength to find which parts contribue the most
+    to fitting'''
+    import pylab as lab
+    bins, data, data_param, cur_wave, results = pik.load(open(path))
+    sfh, age, metal,bins = [], [], [], []
+    for wave in results:
+        if wave <0:
+            continue
+        bins.append(wave)
+        sfh.append(results[wave][-3][0])
+        age.append(results[wave][-2][0])
+        metal.append(results[wave][-1][0])
+    bins = np.asarray(bins)
+    index = bins.argsort()
+    sfh = np.asarray(sfh)[index]
+    age = np.asarray(age)[index]
+    metal = np.asarray(metal)[index]
+    bins = bins[index]
+    
+    lab.plot(bins, sfh, bins, age, bins, metal)
+    lab.legend(('SFH' , 'Age' , 'Metals'))
+    lab.xlabel('Wavelength')
+    lab.ylabel('KL-divergence')
+    lab.title('sfh=%f, age=%f, metal=%f'%(data_param[0],data_param[1],data_param[2]))
+    lab.show()
+    return bins, sfh, age, metal
+    
 if __name__ == '__main__':
     db_path = '/home/thuso/Phd/experements/hierarical/LRG_Stack/burst_dtau_10.db'
     a = run_KL_MC(db_path, 50)
