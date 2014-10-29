@@ -6,9 +6,12 @@ import io, re
 import os
 import sqlite3 as sql
 import glob
+from scipy.special import gammaln
+from scipy import optimize
 import emcee
 from database_utils import numpy_sql, adapt_array, convert_array
 from LRG_lik import grid_search
+import interp_utils as iu
 
 class BaseData(object):
     '''Telescope like object that takes parameters and returns recoverd parameters'''
@@ -95,25 +98,55 @@ class MCMCResults(BaseData):
         interp_points = grid_search(points, self.param_range.values())
         # combine all chains with interp values
         chains = {}
+        prob = {}
         pdf = {}
         for index, p in enumerate(interp_points):
             chains[index] = []
+            prob[index] = []
+            #pdf[index] = []
             for table in self.tables:
                 query_txt = 'Select chains FROM %s Where Real_SFH=? AND Real_age=? AND Real_Z=?'%(table)
                 temp_array = self.conn.execute(query_txt, p).fetchall()
+                query_txt = 'Select log_post FROM %s Where Real_SFH=? AND Real_age=? AND Real_Z=?'%(table)
+                temp_prob = self.conn.execute(query_txt, p).fetchall()
                 if len(temp_array) > 0:
                     chains[index].append(convert_array(temp_array[0][0]))
-
+                    prob[index].append(convert_array(temp_prob[0][0]))
             chains[index] = np.vstack(chains[index])[:,:3]
+            prob[index]  = np.concatenate(prob[index])
             # make pdf
-            pdf[index] = bayesian_blocks(chains[index][:,0])
+            for p_index in range(chains[index].shape[1]):
+                pdf[p_index] = np.histogram(chains[index][:,p_index],
+                                               bins=freedman_bin_width(chains[index][:,p_index],True)[1], normed=True)
         # interpolate pdfs
+        return self._interp_pdf(pdf, interp_points, points)
 
-
+    
+    def _interp_pdf(self, pdf, interp_points, points):
+        '''Interpolates pdf to estimate different models'''
+        # deterimine if bi or tri linear
+        if interp_points.shape[0] == 4:
+            # bilinear
+            # find non unique param and remove
+            bi_points = []
+            for i in range(interp_points.shape[1]):
+                if not np.all(interp_points[0,i] == interp_points[:,i]):
+                    bi_points.append(interp_points[:,i])
+                    pdf.pop(i)
+                    not_used_index = i
+            bi_points = np.vstack(bi_points).T
+            points = points[np.logical_not(i ==np.arange(3))]
+        elif interp_points.shape[0] == 2:
+            # linear
+            pass
+        else:
+            raise NotImplementedError('must have 2, or 4 points')
+        for index, param in enumerate(points):
+            pass
+            # get x axis the same
+        
 
 #### from AstroML                    
-from scipy.special import gammaln
-from scipy import optimize
 def scotts_bin_width(data, return_bins=False):
     r"""Return the optimal histogram bin width using Scott's rule:
 
