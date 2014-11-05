@@ -58,7 +58,7 @@ def cosmoCalc(z,H0,omega_M,omega_DE):
   DCMR = 0.0
 
   # do integral over a=1/(1+z) from az to 1 in n steps, midpoint rule
-  for i in range(n):
+  for i in xrange(n):
     a = az+(1-az)*(i+0.5)/n
     adot = sqrt(WK+(WM/a)+(WR/(a*a))+(WV*a*a))
     DTT = DTT + 1./adot
@@ -127,4 +127,4 @@ def cosmoCalc(z,H0,omega_M,omega_DE):
 
 
 #  return DCMR_Mpc, DA_Mpc, DL_Mpc,kpc_DA  # return comoving radial distance and the angular diameter distance
-  return kpc_DA # only returns the spatial extend per arcsec for the given cosmolgical values
+  return kpc_DA,zage_Gyr # only returns the spatial extend per arcsec for the given cosmolgical values

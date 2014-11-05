@@ -43,22 +43,22 @@ points = np.asarray(points)
 lab.figure()
 lab.hist(points[:,0], 30)
 lab.title('Real distribution')
-lab.xlable('log(Age)')
+lab.xlabel('log(Age)')
 #mean
 lab.figure()
-lab.hist(mean[:,0], 30)
+lab.hist(mean, 30)
 lab.title('Mean distribution')
-lab.xlable('log(Age)')
+lab.xlabel('log(Age)')
 # median
 lab.figure()
-lab.hist(median[:,0], 30)
+lab.hist(median, 30)
 lab.title('Median distribution')
-lab.xlable('log(Age)')
+lab.xlabel('log(Age)')
 # max lik
 lab.figure()
-lab.hist(max_lik[:,0], 30)
+lab.hist(max_lik, 30)
 lab.title('Maximum likelihood distribution')
-lab.xlable('log(Age)')
+lab.xlabel('log(Age)')
 #plot dt of those
 # split randomly into pairs and take difference. make positive
 lab.figure()
@@ -74,6 +74,9 @@ lab.figure()
 lab.hist(np.abs(np.diff(np.random.permutation(max_lik))), 30)
 lab.title('Max lik $\delta$t')
 # quantify see if simmilar to actual
-kuiper.kuiper_two
-for test in  [mean, median, max_lik]:
-    pass
+p_val = [[],[],[]]
+for j,test in  enumerate([mean, median, max_lik]):
+    for i in xrange(1000):
+        permute = np.diff(np.random.permutation(test))
+        real_permute = np.diff(np.random.permutation(points[:,0]))
+        p_val[j].append(kuiper.kuiper_two(np.abs(permute), np.abs(real_permute))[1])
