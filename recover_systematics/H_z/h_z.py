@@ -8,6 +8,7 @@ import sqlite3 as sql
 import glob
 from scipy.special import gammaln
 from scipy import optimize
+from scipy import stats 
 import emcee
 from database_utils import numpy_sql, adapt_array, convert_array
 from LRG_lik import grid_search
@@ -31,7 +32,9 @@ class GetHZ(object):
     def __init__(self):
         self.H0 = 64.
         self.alpha = 3/2.
-
+        self.omega_m = .3
+        self.omega_d = .7
+        self.yr_to_hubble_units = ((3.16887646 * 10**(-8 ))/(3.24077929 * 10**(-20)))
         
     def get_points(self,path):
         '''Gets recovered and real points'''
@@ -46,6 +49,10 @@ class GetHZ(object):
             param_range[col] = np.unique(np.ravel(np.vstack(param_range[col].values())))
         # get chains and log_probs
         mean, median, max_lik, points = [], [], [], []
+        # get uncertanties
+        mean_std, median_percetiles = [], []
+        # chain for making pdf
+        chain = []
         for age in param_range['Real_age']:
             for metal in  param_range['Real_Z']:
                 chains, prob = [], []
@@ -61,36 +68,94 @@ class GetHZ(object):
                 if len(chains) > 0:
                     chains = np.vstack(chains)[:,:3]
                     prob  = np.concatenate(prob)
-                    mean.append(chains[:,1].mean())
-                    median.append(np.percentile(chains[:,1], 50))
-                    max_lik.append(chains[prob.argmax(),1])
-                    points.append([age, metal])
-
+                    mean.append(np.mean(10**chains[:,1]))
+                    mean_std.append(np.std(10**chains[:,1]))
+                    median_percetiles.append(np.percentile(10**chains[:,1], [16.,84.]))
+                    median.append(np.percentile(10**chains[:,1], 50))
+                    max_lik.append(10**chains[prob.argmax(),1])
+                    points.append([10**age, metal])
+                    chain.append(10**chains[:,1])
+        # put in yr
         self.mean = np.asarray(mean)
+        self.mean_std = np.asarray(mean_std)
+        self.median_percetiles = np.asarray(median_percetiles)
+        self.chain = chain
         self.median = np.asarray(median)
         self.max_lik = np.asarray(max_lik)
         self.points = np.asarray(points)
+        self.median_percetiles[:,1] = self.median_percetiles[:,1] - self.median
+        self.median_percetiles[:,0] = self.median - self.median_percetiles[:,0]
 
-    def get_powerlaw(self):
-        '''Fits H(z) = powerlaw'''
-        z = np.linspace(0.001, 5)
+        
+    def fit_real( self):
+        '''Fits H(z) = powerlaw against real data'''
+        z = np.linspace(0.01, 2)
         universe_age = []
         for i in z:
-            universe_age.append(nedwright.cosmoCalc(i,self.H0,.3,.7)[1])
+            universe_age.append(nedwright.cosmoCalc(i,self.H0,.2,.8)[1])
         universe_age = 1/(np.asarray(universe_age)*10**9 )
         # put h0 into km/s/Mpc
         universe_age *=((3.16887646 * 10**(-8 ))/(3.24077929 * 10**(-20)))
-        self.real_HZ = np.vstack((z[:-1], -1/(z[:-1]+1)*np.diff(universe_age)/np.diff(z))
+        self.real_HZ = np.vstack((z[:-1], 1/(z[:-1]+1)*np.diff(universe_age)/np.diff(z))
 ).T
-        x=optimize.fmin_powell(power_law, [self.H0+5, 2.], args=(self.real_HZ[:,0],self.real_HZ[:,1]))
+        recv, recv_prob = mcmc(lnprob,self.real_HZ[:,0], self.real_HZ[:,1],
+                                np.ones_like(self.real_HZ)*.001)
+        return recv, recv_prob
+
+    def fit_means(self):
+        '''Real fit of H(Z) using netwright ages'''
+        z = []
+        means = self.mean #* self.yr_to_hubble_units
+        std =  self.mean_std #* self.yr_to_hubble_units
+        for t in self.points[:,0]:
+            # find z that gives closest value
+            if len(z) == 0:
+                temp_z = 5.
+            z.append(optimize.fmin(self.redshift_finder, temp_z, args=(t,)))
+            temp_z = z[-1]
+        z = np.concatenate(z)
+        binz = np.histogram(z)[1]
         
+        index = np.random.permutation(range(z.shape[0]))
+        y = 1/(z[index[:-1]]+1)*np.diff(z[index])/np.diff(means[index])
+        #propagate uncertanty
+        error = np.abs(y) * std[index[:-1]]/means[index[:-1]]
+        # remove zeros
+        z = z[y != 0]
+        error = error[y != 0]
+        y = y[y != 0]
+        recv, recv_prob = mcmc(lnprob, z, y, error) 
+                    
+
+    def redshift_finder(self, z, t):
+        #t = args
+        if z <= 0:
+            return np.inf
+        guess_t = nedwright.cosmoCalc(z, self.H0, self.omega_m, self.omega_d)[1]**9
+        return (t - guess_t)**2
+    
     def get_LT_metric(self):
         '''Fits H(z) = omega_m, etc...'''
 
     def get_dt_vs_dz(self):
         '''Integrated power law t(z)'''
-        
-        
+
+
+def mcmc(lnpost, dz, dt, terr):
+    '''fit data with mcmc'''
+    # make sampler
+    sampler = emcee.MHSampler(np.eye(2), 2, lnpost, args=(dz,dt,terr))
+    # run and tune covarence
+    pos, _,rstate = sampler.run_mcmc([88, 4/3.],100)
+    # run for a few trys for burn-in
+    for i in range(6):
+        sampler.cov = np.cov(sampler.chain[-200:].T)
+        pos, _,rstate = sampler.run_mcmc(pos, 1000)
+    # start chain
+    sampler.reset()
+    #ess = -9999.
+    sampler.run_mcmc(pos, 10**5)
+    return sampler.flatchain, sampler.lnprobability
     
 class RecoverHZ(object):
     '''Uses 3 different ways of recovering the H(z).
@@ -499,12 +564,32 @@ def histogram(a, bins=10, range=None, **kwargs):
 
     return np.histogram(a, bins, range, **kwargs)
 
-def power_law(x, *args):
-    return np.sum((x[0]*(1+args[0])**x[1] - args[1])**2)
+
+def power_law(theta, *args):
+    h0, alpha = theta
+    z = args[0]
+    y = args[1]
+    yerr = args[2]
+    return stats.norm.logpdf(h0*(1+z)**alpha, y, yerr).sum()
+
 
 def hz_metric(x, *args):
     z = args[0]
     y = args[1]
+    yerr = args[1]
     tot = np.sum(x)
     model = -abs(x[0])*(x[1]/tot*(z+1)**3 + x[2]/tot*(z+1)**2+x[3]/tot)**0.5
     return np.sum((model - y)**2)
+
+def lnprior(theta):
+    '''prior for H_0 and alpha in powerlaw'''
+    h0, alpha = theta
+    if -5.0 < alpha < 5.0 and 0 < h0 < 100:
+        return 0.0
+    return -np.inf
+
+def lnprob(theta, x, y, yerr):
+    lp = lnprior(theta)
+    if not np.isfinite(lp):
+        return -np.inf
+    return lp + power_law(theta, x, y, yerr)
