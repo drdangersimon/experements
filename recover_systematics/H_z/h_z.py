@@ -14,6 +14,7 @@ from database_utils import numpy_sql, adapt_array, convert_array
 from LRG_lik import grid_search
 import interp_utils as iu
 import nedwright
+from uncertainties import unumpy, ufloat
 
 class BaseData(object):
     '''Telescope like object that takes parameters and returns recoverd parameters'''
@@ -87,22 +88,28 @@ class GetHZ(object):
         self.median_percetiles[:,0] = self.median - self.median_percetiles[:,0]
 
         
-    def fit_real( self):
+    def fit_real(self):
         '''Fits H(z) = powerlaw against real data'''
-        z = np.linspace(0.01, 2)
+        # match paper
+        z = [.44,.6,.73,.35,.57,2.36]
+        z.append( np.linspace(0.01, 2))
+        z = np.sort(np.hstack(z))
         universe_age = []
         for i in z:
             universe_age.append(nedwright.cosmoCalc(i,self.H0,.2,.8)[1])
-        universe_age = 1/(np.asarray(universe_age)*10**9 )
-        # put h0 into km/s/Mpc
-        universe_age *=((3.16887646 * 10**(-8 ))/(3.24077929 * 10**(-20)))
-        self.real_HZ = np.vstack((z[:-1], 1/(z[:-1]+1)*np.diff(universe_age)/np.diff(z))
-).T
+        
+        # put h0 into km/s/Mp
+        # gyr to year
+        universe_age = np.asarray(universe_age)*10**9 
+        #universe_age = universe_age)
+        self.real_HZ = np.vstack((z[:-1], 1/(z[:-1]+1)*(np.diff(z)/np.diff(yr_to_km_s_mpc(universe_age))))).T
+        # units still wrong
+        self.real_HZ[:,1] = 1./self.real_HZ[:,1]
         recv, recv_prob = mcmc(lnprob,self.real_HZ[:,0], self.real_HZ[:,1],
-                                np.ones_like(self.real_HZ)*.001)
-        return recv, recv_prob
+                                np.ones_like(self.real_HZ)[:,0]*.001)
+        return recv, recv_prob, self.real_HZ[:,0], self.real_HZ[:,1], None
 
-    def fit_means(self):
+    def fit_summary_stats(self):
         '''Real fit of H(Z) using netwright ages'''
         z = []
         means = self.mean #* self.yr_to_hubble_units
@@ -115,18 +122,31 @@ class GetHZ(object):
             temp_z = z[-1]
         z = np.concatenate(z)
         binz = np.histogram(z)[1]
+        bint =[]
+        #binerr =[]
+        for i in range(len(binz)-1):
+            index = np.where(np.logical_and(z >= binz[i], z<binz[i+1]))[0]
+            temp = []
+            for j in index:
+                temp.append(ufloat(means[j], std[j]))
+            bint.append(np.mean(temp))
+            
+        bint = np.asarray(bint)
         
-        index = np.random.permutation(range(z.shape[0]))
-        y = 1/(z[index[:-1]]+1)*np.diff(z[index])/np.diff(means[index])
-        #propagate uncertanty
-        error = np.abs(y) * std[index[:-1]]/means[index[:-1]]
-        # remove zeros
-        z = z[y != 0]
-        error = error[y != 0]
-        y = y[y != 0]
-        recv, recv_prob = mcmc(lnprob, z, y, error) 
+        # make h_z
+        y = -1/(binz[:-2]+1)*np.diff(binz[:-1])/np.diff(bint)
+        # convert to hubble units
+        y *= self.yr_to_hubble_units
+        # turn back to numpy arrays
+        error = unumpy.std_devs(y)
+        y = unumpy.nominal_values(y)
+        # fit
+        recv, recv_prob = mcmc(lnprob, binz[:-2], y, error)
+        return recv, recv_prob,  binz[:-2], y, error
                     
-
+    def fit_posteirors(self):
+        pass
+    
     def redshift_finder(self, z, t):
         #t = args
         if z <= 0:
@@ -139,7 +159,15 @@ class GetHZ(object):
 
     def get_dt_vs_dz(self):
         '''Integrated power law t(z)'''
-
+        
+def yr_to_km_s_mpc(yrs):
+    '''Turns years in to Km/s/Mpc (hubble units)'''
+    # years to seconds
+    sec = yrs * 31556926.
+    # seconds -> herts to km/s/Mpc
+    hubble = 1./(sec) * 1./(3.24*10**(-20.))
+    return hubble
+    
 
 def mcmc(lnpost, dz, dt, terr):
     '''fit data with mcmc'''
