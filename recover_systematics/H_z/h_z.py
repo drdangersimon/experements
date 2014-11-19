@@ -36,8 +36,8 @@ class GetHZ(object):
         self.omega_m = .3
         self.omega_d = .7
         self.yr_to_hubble_units = ((3.16887646 * 10**(-8 ))/(3.24077929 * 10**(-20)))
-        
-    def get_points(self,path):
+         
+    def get_points(self, path):
         '''Gets recovered and real points'''
         db_class = MCMCResults(path)
         # get all params
@@ -96,7 +96,8 @@ class GetHZ(object):
         z = np.sort(np.hstack(z))
         universe_age = []
         for i in z:
-            universe_age.append(nedwright.cosmoCalc(i,self.H0,.2,.8)[1])
+            universe_age.append(nedwright.cosmoCalc(i,self.H0, self.omega_m,
+                                                     self.omega_d)[1])
         
         # put h0 into km/s/Mp
         # gyr to year
@@ -129,7 +130,7 @@ class GetHZ(object):
             temp = []
             for j in index:
                 temp.append(ufloat(means[j], std[j]))
-            bint.append(np.mean(temp))
+            bint.append(np.median(temp))
             
         bint = np.asarray(bint)
         
@@ -145,7 +146,16 @@ class GetHZ(object):
         return recv, recv_prob,  binz[:-2], y, error
                     
     def fit_posteirors(self):
-        pass
+        '''fits with full posteriors'''
+        z = []
+        for t in self.points[:,0]:
+            # find z that gives closest value
+            if len(z) == 0:
+                temp_z = 5.
+            z.append(optimize.fmin(self.redshift_finder, temp_z, args=(t,)))
+            temp_z = z[-1]
+        z = np.concatenate(z)
+        binz = np.histogram(z)[1]
     
     def redshift_finder(self, z, t):
         #t = args
@@ -621,3 +631,44 @@ def lnprob(theta, x, y, yerr):
     if not np.isfinite(lp):
         return -np.inf
     return lp + power_law(theta, x, y, yerr)
+
+class pdf_log_prob(object):
+    '''Uses results from mcmc chains to do sampling'''
+
+    def __init__(self, chains, z):
+        ''' Input a list of chains to be changed into a pdf'''
+        self.chains = chains
+        # get range and data points
+        big_chain = np.hstack(self.chain)
+        min_max = [big_chain.min(), big_chain.max()]
+        _, self.bins  = histogram(big_chain, 'freedman')
+        self.pdf = []
+        # cutoff unphysical values
+        if apply_prior:
+            index = np.where(np.log10(bins[:-1])>7.8)[0]
+            self.bins = self.bins[index]
+        for chain in chains:
+            self.pdf.append(histogram(chain, self.bins, normed=True)[0])
+        # remove extra point
+        self.bins = self.bins[:-1]
+        self.pdf = np.vstack(self.pdf)
+        # make zeros very small
+        self.pdf[self.pdf == 0] = 10**-99
+        self.pdf[np.isnan(self.pdf)] = 10**-99
+        # take log
+        self.pdf = np.log10(self.pdf)
+        
+
+    def logprob(self, theta, z):
+        '''returns log posterior for theta'''
+        lp, y = self.prior(theta)
+        if np.isinfinite(lp):
+            return -np.inf
+
+
+    def prior(self, theta, z):
+        '''calculates prior'''
+        # make bins in to h(z) for all
+        hubble =  yr_to_km_s_mpc(self.bins)
+        y = yr_to_km_s_mpc(-1/(z[:-2]+1)*np.diff(z[:-1])/np.diff(self.bins))
+        hz = theta[0] * (1 + z)**theta[1]
