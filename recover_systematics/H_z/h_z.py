@@ -103,10 +103,10 @@ class GetHZ(object):
         # gyr to year
         universe_age = np.asarray(universe_age)*10**9 
         #universe_age = universe_age)
-        self.real_HZ = np.vstack((z[:-1], 1/(z[:-1]+1)*(np.diff(z)/np.diff(yr_to_km_s_mpc(universe_age))))).T
+        self.real_HZ = np.vstack((z[:-1], -1/(z[:-1]+1)*(np.diff(z)/np.diff(yr_to_km_s_mpc(universe_age))))).T
         # units still wrong
         self.real_HZ[:,1] = 1./self.real_HZ[:,1]
-        recv, recv_prob = mcmc(lnprob,self.real_HZ[:,0], self.real_HZ[:,1],
+        recv, recv_prob = mcmc(lnprob, self.real_HZ[:,0], self.real_HZ[:,1],
                                 np.ones_like(self.real_HZ)[:,0]*.001)
         return recv, recv_prob, self.real_HZ[:,0], self.real_HZ[:,1], None
 
@@ -156,7 +156,9 @@ class GetHZ(object):
             temp_z = z[-1]
         z = np.concatenate(z)
         binz = np.histogram(z)[1]
-    
+        pdf_class = pdf_log_prob(self.chain, z, binz)
+        recv, recv_prob = mcmc(pdf_class.logprob, None, None,None)
+                               
     def redshift_finder(self, z, t):
         #t = args
         if z <= 0:
@@ -175,19 +177,25 @@ def yr_to_km_s_mpc(yrs):
     # years to seconds
     sec = yrs * 31556926.
     # seconds -> herts to km/s/Mpc
-    hubble = 1./(sec) * 1./(3.24*10**(-20.))
+    hubble = (sec) * (3.24*10**(-20.))
     return hubble
-    
 
-def mcmc(lnpost, dz, dt, terr):
+def km_s_mps_2_yr(kms):
+    sec = 1/(kms * 3.24077929 * 10**(-20))
+    yr = sec * 3.16888*10**(-8)
+    return yr
+
+def mcmc(lnpost, dz, dt, terr=None):
     '''fit data with mcmc'''
     # make sampler
-    sampler = emcee.MHSampler(np.eye(2), 2, lnpost, args=(dz,dt,terr))
+    sampler = emcee.MHSampler(np.eye(3), 3, lnpost, args=(dz,dt,terr))
     # run and tune covarence
-    pos, _,rstate = sampler.run_mcmc([88, 4/3.],100)
+    pos, _,rstate = sampler.run_mcmc([88, 1/2.,1/2],100)
     # run for a few trys for burn-in
-    for i in range(6):
-        sampler.cov = np.cov(sampler.chain[-200:].T)
+    for i in range(9):
+        if i == 1:
+            sampler.cov = np.cov(sampler.chain[-200:].T)
+        #print sampler.cov
         pos, _,rstate = sampler.run_mcmc(pos, 1000)
     # start chain
     sampler.reset()
@@ -615,14 +623,17 @@ def hz_metric(x, *args):
     z = args[0]
     y = args[1]
     yerr = args[1]
-    tot = np.sum(x)
-    model = -abs(x[0])*(x[1]/tot*(z+1)**3 + x[2]/tot*(z+1)**2+x[3]/tot)**0.5
+    #print z, y
+    tot = np.sum(x[1:])
+    model = np.sqrt((1+z)**2.*(1+z*x[1]) - z*(2+z)*x[2])*x[0]
+    #model = 64.*((x[1]/tot)*(z+1)**3. +(x[2]/tot)*(1+z)**(2/3.))**0.5
     return np.sum((model - y)**2)
 
 def lnprior(theta):
     '''prior for H_0 and alpha in powerlaw'''
-    h0, alpha = theta
-    if -5.0 < alpha < 5.0 and 0 < h0 < 100:
+    h0, matter, de = theta
+    #print theta
+    if 0. < matter and 0 < h0  and 0 < de :
         return 0.0
     return -np.inf
 
@@ -630,22 +641,23 @@ def lnprob(theta, x, y, yerr):
     lp = lnprior(theta)
     if not np.isfinite(lp):
         return -np.inf
-    return lp + power_law(theta, x, y, yerr)
+    return lp +hz_metric(theta, x, y, yerr)
 
 class pdf_log_prob(object):
     '''Uses results from mcmc chains to do sampling'''
 
-    def __init__(self, chains, z):
+    def __init__(self, chains, z, binz, apply_prior=False):
         ''' Input a list of chains to be changed into a pdf'''
         self.chains = chains
+        self.binz = binz
         # get range and data points
-        big_chain = np.hstack(self.chain)
+        big_chain = np.hstack(chains)
         min_max = [big_chain.min(), big_chain.max()]
         _, self.bins  = histogram(big_chain, 'freedman')
         self.pdf = []
         # cutoff unphysical values
         if apply_prior:
-            index = np.where(np.log10(bins[:-1])>7.8)[0]
+            index = np.where(np.log10(self.bins[:-1])>7.8)[0]
             self.bins = self.bins[index]
         for chain in chains:
             self.pdf.append(histogram(chain, self.bins, normed=True)[0])
@@ -655,20 +667,48 @@ class pdf_log_prob(object):
         # make zeros very small
         self.pdf[self.pdf == 0] = 10**-99
         self.pdf[np.isnan(self.pdf)] = 10**-99
+        # combine into binz
+        self.pdf_bin = []
+        for i in range(len(binz)-1):
+            index = np.where(np.logical_and(z >= binz[i], z < binz[i+1]))[0]
+            self.pdf_bin.append(self.pdf[index].mean(0))
+        self.pdf_bin = np.vstack(self.pdf_bin)
         # take log
+        self.pdf_bin = np.log10(self.pdf_bin)
         self.pdf = np.log10(self.pdf)
         
 
-    def logprob(self, theta, z):
+    def logprob(self, theta,  x, y, yerr):
         '''returns log posterior for theta'''
         lp, y = self.prior(theta)
-        if np.isinfinite(lp):
+        if np.isinf(lp):
             return -np.inf
-
-
-    def prior(self, theta, z):
+        prob = 0.
+        for i in range(len(self.pdf_bin)):
+            prob += np.interp(km_s_mps_2_yr(y[i]), self.bins, self.pdf_bin[i]) 
+        return prob + lp
+    
+    def prior(self, theta):
         '''calculates prior'''
-        # make bins in to h(z) for all
-        hubble =  yr_to_km_s_mpc(self.bins)
-        y = yr_to_km_s_mpc(-1/(z[:-2]+1)*np.diff(z[:-1])/np.diff(self.bins))
-        hz = theta[0] * (1 + z)**theta[1]
+        # check if greater than age
+        if theta[0] > 100 or theta[0] < 0:
+            return -np.inf, None
+        if np.any(theta[1:] < 0):
+            return -np.inf, None
+        # make sure densityies add up to 1
+        theta[1:] = theta[1:]/np.sum(theta[1:]) 
+        hz = hofz(theta, self.binz)
+        if (np.any(km_s_mps_2_yr(hz) > self.bins.max()) or
+            np.any(km_s_mps_2_yr(hz) < self.bins.min())):
+            return -np.inf, None
+        else:
+            # retun constant
+            return 0.,hz
+
+
+def hofz(x, z):
+    '''Hubble function'''
+    # no equation of state
+    hz = np.sqrt((1+z)**2.*(1+z*x[1]) - z*(2+z)*x[2])*x[0]
+    #hz = theta[0] * np.sqrt(theta[1]*(1+z)**3 + theta[2]*(1+z)**(2/3.))
+    return hz
