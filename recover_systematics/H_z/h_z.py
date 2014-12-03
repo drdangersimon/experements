@@ -104,8 +104,7 @@ class GetHZ(object):
         universe_age = np.asarray(universe_age)*10**9 
         #universe_age = universe_age)
         self.real_HZ = np.vstack((z[:-1], -1/(z[:-1]+1)*(np.diff(z)/np.diff(yr_to_km_s_mpc(universe_age))))).T
-        # units still wrong
-        self.real_HZ[:,1] = 1./self.real_HZ[:,1]
+
         recv, recv_prob = mcmc(lnprob, self.real_HZ[:,0], self.real_HZ[:,1],
                                 np.ones_like(self.real_HZ)[:,0]*.001)
         return recv, recv_prob, self.real_HZ[:,0], self.real_HZ[:,1], None
@@ -188,15 +187,16 @@ def km_s_mps_2_yr(kms):
 def mcmc(lnpost, dz, dt, terr=None):
     '''fit data with mcmc'''
     # make sampler
-    sampler = emcee.MHSampler(np.eye(3), 3, lnpost, args=(dz,dt,terr))
+    sampler = emcee.EnsembleSampler(10 ,3 ,lnpost, args=(dz,dt,terr))
+    #sampler = emcee.MHSampler(np.eye(3), 3, lnpost, args=(dz,dt,terr))
     # run and tune covarence
-    pos, _,rstate = sampler.run_mcmc([88, 1/2.,1/2],100)
+    pos, _,rstate = sampler.run_mcmc(np.random.rand(10,3),100)
     # run for a few trys for burn-in
-    for i in range(9):
-        if i == 1:
-            sampler.cov = np.cov(sampler.chain[-200:].T)
+    for i in range(3):
+        #if i == 1:
+            #sampler.cov = np.cov(sampler.chain[-2000:].T)
         #print sampler.cov
-        pos, _,rstate = sampler.run_mcmc(pos, 1000)
+        pos, _,rstate = sampler.run_mcmc(None, 1000)
     # start chain
     sampler.reset()
     #ess = -9999.
@@ -625,23 +625,25 @@ def hz_metric(x, *args):
     yerr = args[1]
     #print z, y
     tot = np.sum(x[1:])
-    model = np.sqrt((1+z)**2.*(1+z*x[1]) - z*(2+z)*x[2])*x[0]
-    #model = 64.*((x[1]/tot)*(z+1)**3. +(x[2]/tot)*(1+z)**(2/3.))**0.5
-    return np.sum((model - y)**2)
+    model = hofz(x,z)
+    
+    return -np.sum((model - y)**2)
 
 def lnprior(theta):
     '''prior for H_0 and alpha in powerlaw'''
     h0, matter, de = theta
     #print theta
-    if 0. < matter and 0 < h0  and 0 < de :
+    # lower limits and upper limits
+    if (0. < matter and 0 < h0  and 0 < de) and (matter < 1. and h0 < 100. and de < 1.) :
         return 0.0
-    return -np.inf
+    else:
+    	return -np.inf
 
 def lnprob(theta, x, y, yerr):
     lp = lnprior(theta)
     if not np.isfinite(lp):
         return -np.inf
-    return lp +hz_metric(theta, x, y, yerr)
+    return lp + hz_metric(theta, x, y, yerr)
 
 class pdf_log_prob(object):
     '''Uses results from mcmc chains to do sampling'''
